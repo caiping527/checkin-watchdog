@@ -15,12 +15,18 @@ on:
         description: '发一条测试告警到手机（验证推送通道）'
         type: boolean
         default: false
+  # 外部心跳（Healthchecks）判定超时/恢复时，POST /dispatches 触发这里。
+  # 心跳服务在 GitHub 外面，一次 HTTP 请求即可；由本工作流完成企业微信
+  # 自建应用的 gettoken + message/send 两步，最终推到微信「东东推送」。
+  repository_dispatch:
+    types: [heartbeat_down, heartbeat_up]
 
 permissions:
   contents: read
 
 jobs:
   watch:
+    if: github.event_name != 'repository_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
@@ -34,3 +40,20 @@ jobs:
           WATCH_FORCE_ALERT: ${{ inputs.force_alert }}
           WATCH_STALE_QUEUED_MIN: '90'
         run: python3 watchdog.py
+
+  # 只由外部心跳的 Down/Up 事件触发，不做巡检、也不发报平安 ping。
+  heartbeat_alert:
+    if: github.event_name == 'repository_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: 把心跳告警推到微信
+        env:
+          WECOM_APP: ${{ secrets.WECOM_APP }}
+          HC_EVENT: ${{ github.event.action }}
+          HC_NAME: ${{ github.event.client_payload.name }}
+          HC_STATUS: ${{ github.event.client_payload.status }}
+          HC_TEST: ${{ github.event.client_payload.test }}
+        run: python3 watchdog.py --heartbeat-alert

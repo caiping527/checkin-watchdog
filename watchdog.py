@@ -264,6 +264,45 @@ FIX_GUIDE = [
 ]
 
 
+def build_heartbeat_alert(name, status, now):
+    """第三方心跳判超时后的告警。这条消息由 Healthchecks 经 GitHub 触发，
+    不经过本巡检程序，所以能兜住「巡检自己完全没跑」。"""
+    lines = [
+        "⚠️ 签到巡检心跳超时（%s 北京时间）" % now.astimezone(BEIJING).strftime("%m-%d %H:%M"),
+        "",
+        "第三方心跳没收到今天的报平安：%s（状态 %s）" % (name or "签到巡检", status or "Down"),
+        "说明：checkin-watchdog 巡检仓库今天没跑起来，五个签到项目今天没人检查。",
+        "这条告警由心跳服务触发，不经过 GitHub 巡检程序。",
+        "",
+        "【停了怎么解决】",
+        "1 打开 github.com/caiping527/checkin-watchdog/actions",
+        "2 有黄色横幅就点 Enable workflow",
+        "3 点 Run workflow 手动跑一次巡检",
+        "4 再看五个项目当天有没有签到，缺的点 Run workflow 补签",
+        "常见原因：巡检工作流被停用、WATCH_PAT 过期、GitHub 调度故障。",
+    ]
+    return "\n".join(lines)
+
+
+def send_heartbeat_event():
+    """由 repository_dispatch 触发：把心跳的 Down/Up 事件推到微信。
+
+    绝不调用 ping_heartbeat()，否则会把一次「故障告警」误当成巡检报平安。
+    """
+    event = (os.environ.get("HC_EVENT") or "heartbeat_down").strip()
+    if event == "heartbeat_up":
+        text = "✅ 签到巡检已恢复报平安（%s 北京时间），忽略即可" % (
+            utcnow().astimezone(BEIJING).strftime("%m-%d %H:%M"))
+    else:
+        text = build_heartbeat_alert(
+            os.environ.get("HC_NAME"), os.environ.get("HC_STATUS"), utcnow())
+        if (os.environ.get("HC_TEST") or "").strip().lower() in ("1", "true", "yes"):
+            text = "【链路自检，非真实故障，忽略即可】\n" + text
+    print("--- 心跳事件 %s 推送内容 ---" % event)
+    print(text)
+    return 0 if push_wecom(text) else 1
+
+
 def build_alert(bad, now):
     lines = ["⚠️ 签到巡检异常（%s 北京时间）" % now.astimezone(BEIJING).strftime("%m-%d %H:%M"), ""]
     for item in bad:
@@ -282,6 +321,11 @@ def build_alert(bad, now):
 
 
 def main():
+    # 外部心跳判定超时/恢复时，由 repository_dispatch 单独触发这一分支。
+    # 必须放在 WATCH_PAT 检查之前：该 job 只需要 WECOM_APP。
+    if "--heartbeat-alert" in sys.argv:
+        return send_heartbeat_event()
+
     token = (os.environ.get("WATCH_PAT") or os.environ.get("GITHUB_TOKEN") or "").strip()
     if not token:
         print("缺少 WATCH_PAT，无法读取各仓库运行记录")

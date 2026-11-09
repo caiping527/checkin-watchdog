@@ -132,15 +132,36 @@
      名称 HEARTBEAT_URL，值填 Ping URL。不要提交进代码、不要贴聊天。
   4) 加告警通道（建议两个都开，互为冗余）
      a. Email：填常用邮箱，免费、不受境外访问影响。
-     b. Webhook -> 企业微信群机器人：
-        Method   POST
-        URL      https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=<群机器人key>
-        Header   Content-Type: application/json
-        Down 请求体（Up 留空，避免恢复时也打扰）：
-        {"msgtype":"text","text":{"content":"⚠️ 心跳超时：$NAME 状态 $STATUS\n说明：签到巡检今天没按时报平安，五个项目今天没人检查。\n怎么办：\n1 打开 github.com/caiping527/checkin-watchdog/actions\n2 有黄色横幅点 Enable workflow\n3 点 Run workflow 手动跑一次巡检\n4 看五个项目当天有没有签到，缺的点 Run workflow 补签\n常见原因：工作流被停用、WATCH_PAT 过期、GitHub 调度故障。"}}
-        $NAME / $STATUS 由 Healthchecks 自动替换，能点名是哪个 check。
-        配置页有 Test 按钮：点一下手机收到，就说明境外->企微这条链路通；
-        收不到就只靠 Email，或改由 14:07 巡检读 Healthchecks API 后再推企微。
+     b. Webhook -> 本仓库的 repository_dispatch（推荐，不用装企业微信 APP）
+        让 Healthchecks 用一次 POST 触发本仓库的 heartbeat_alert job，由它
+        用已有的 WECOM_APP 完成「gettoken + message/send」两步，最终推到
+        微信里那个叫「东东推送」的自建应用会话 —— 与 14:07 巡检同一条通道，
+        已实测可达。Healthchecks 在境外，但目标是 api.github.com，比直连
+        qyapi.weixin.qq.com 更稳。
+
+        Down 组：
+          Method   POST
+          URL      https://api.github.com/repos/caiping527/checkin-watchdog/dispatches
+          Request Headers（每行一条，令牌用你自己的 GitHub 令牌）：
+            Accept: application/vnd.github+json
+            Authorization: Bearer <GitHub 令牌>
+            Content-Type: application/json
+            X-GitHub-Api-Version: 2022-11-28
+          Request Body：
+            {"event_type":"heartbeat_down","client_payload":{"name":"$NAME","status":"$STATUS","now":"$NOW"}}
+
+        Up 组（必填，填同一个 URL 和 Headers，只换 event_type）：
+          Request Body：
+            {"event_type":"heartbeat_up","client_payload":{"name":"$NAME","status":"$STATUS","now":"$NOW"}}
+
+        $NAME / $STATUS / $NOW 由 Healthchecks 自动替换。Up 事件只在真出过
+        故障后触发一次，会回一条「已恢复」，方便确认修好了。
+
+        令牌建议用 fine-grained PAT：只勾 checkin-watchdog 一个仓库、
+        Contents: Read and write，别用全账号通用令牌；泄漏时可随时单独吊销。
+        repository_dispatch 要求对该仓库有写权限，只读令牌会返回 404。
+
+        配置页有 Test 按钮：点一下会触发一次真实 Down 告警，手机收到即通。
   5) 验证闭环
      · 首次激活（最容易漏）：官方把「从未收到 ping」的 check 标为 New 状态，
        告警只在 check 进入 Down 时发出。所以配好 HEARTBEAT_URL 后，
@@ -165,29 +186,43 @@
   NAS / 云主机时当第二意见，不要当主链路。
 
   【凭据格式】WECOM_APP 只读前 4 段：corpid,corpsecret,touser,agentid。
-  多出来的第 5 段会被忽略；如果那是群机器人 key，请按第 4 步拼成完整
-  Webhook URL 使用，不要塞进 WECOM_APP。
+  多出来的第 5 段会被忽略，不要塞进 WECOM_APP。凭据不要贴进聊天、不要
+  提交进代码；本次改动没有回显或写死任何凭据。
 
 【心跳告警怎么到手机（最容易搞混的一点）】
-  14:07 巡检现在用的是「企业微信自建应用」：要先 gettoken 拿凭证、再
-  message/send 发消息，两步 HTTP。这条通道已实测可用，但 Healthchecks 的
-  Webhook 一次只能发一个请求，做不了两步，所以心跳告警不能走自建应用，
-  要改走「企业微信群机器人 Webhook」：一个 POST 直达，群消息同样在手机
-  企业微信里弹通知，免费、无条数限制，效果一样。
-  建法：企业微信里建一个只有自己的群 -> 群设置 -> 群机器人 -> 添加 ->
-  复制 Webhook 地址（形如 https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...）。
-  若手上已有群机器人 key，直接拼成上面第 4 步的 URL 即可。
-  配好后务必在 Healthchecks 集成页点 Test：手机收到就说明「第三方服务 ->
-  企微」这条独立链路通了。Healthchecks 服务器在德国，境外访问 qyapi 是
-  唯一的不确定点；所以同时开 Email 冗余，两者都收不到再考虑中转方案。
-  想要「个人微信」而不是企业微信：PushPlus / Server酱 有免费额度，但它们
-  只是推送通道、不会自己判超时，还得另配定时检查，不建议为了这个加一层。
+  先认清一件事：微信里那个叫「东东推送」的会话，不是独立推送服务，
+  就是你自己注册的企业微信自建应用通过「微信插件」在微信里的显示名。
+  之前那条「签到巡检异常」测试告警正是它推的，所以这条通道早就通了，
+  不需要下载企业微信 APP，也不需要建群、加群机器人。
+
+  为什么不是「群机器人」：群机器人虽然一次 POST 直达（Healthchecks 的
+  Webhook 只能发一个请求），但腾讯官方在微信开放社区明确回复「企业微信群
+  及其他推送的消息目前不支持同步到微信插件」。也就是说装了 APP 建了群，
+  消息大概率只留在企业微信里，微信收不到。第三方教程说可以，是额外在
+  管理后台开了「允许成员在微信插件中接收和回复聊天消息」开关，且各端表现
+  不一致，不可靠。所以本项目不用它。
+
+  为什么需要绕一下：自建应用要 gettoken + message/send 两步 HTTP，
+  Healthchecks 一次请求做不到。解法是让 Healthchecks 把「一次 POST」
+  打到 GitHub 的 repository_dispatch，由本仓库的 heartbeat_alert job
+  完成剩下的两步。job 与 14:07 巡检共用 WECOM_APP，推到同一个微信会话。
+  该 job 不跑巡检、也不发报平安 ping，避免把故障告警误当作巡检正常。
 
   【完整链路】
   平时：巡检 14:07 跑完 -> GET HEARTBEAT_URL -> Healthchecks 记 Up -> 静默。
   出事：巡检没跑 / 被停用 / GitHub 调度丢失 -> 15:07 没 ping -> Down
-        -> Healthchecks 自己 POST 群机器人 Webhook + 发 Email -> 手机响。
-  这条链路完全不依赖 GitHub，正是为了兜住「连巡检都没运行」。
+        -> Healthchecks POST /dispatches -> heartbeat_alert -> 微信「东东推送」
+        -> 同时发 Email（冗余）。
+
+  【这条链路的边界，必须知道】
+  Healthchecks 判超时和发通知在 GitHub 外面，所以「巡检仓库自己没跑」能兜住；
+  但告警的最后一步借了 GitHub Actions 来发消息。若 GitHub 整体故障到连
+  Actions 都起不来，这条告警也会一起失效 —— 此时只有 Email 能到你。
+  想彻底不依赖 GitHub，就换成 PushPlus / Server酱 这类一步到微信的通道：
+  微信扫码拿 token，Webhook 的 URL 填 https://www.pushplus.plus/send ，
+  Down 请求体 {"token":"<你的token>","title":"⚠️ 签到巡检心跳超时",
+  "content":"巡检今天没报平安，打开 github.com/caiping527/checkin-watchdog/actions 点 Run workflow",
+  "template":"txt","channel":"wechat"}；代价是多注册一个服务。
 
 【调整】
   改检查时间：.github/workflows/watch.yml 里的 cron（UTC，减 8 小时换算北京）
