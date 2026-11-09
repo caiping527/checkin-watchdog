@@ -25,6 +25,7 @@ jobs:
         env:
           WATCH_PAT: ${{ secrets.WATCH_PAT }}
           WECOM_APP: ${{ secrets.WECOM_APP }}
+          HEARTBEAT_URL: ${{ secrets.HEARTBEAT_URL }}
           WATCH_FORCE_ALERT: ${{ inputs.force_alert }}
           WATCH_STALE_QUEUED_MIN: '90'
         run: python3 watchdog.py

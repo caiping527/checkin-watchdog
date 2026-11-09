@@ -16,6 +16,10 @@
 
 只在有异常时推送；全绿时完全静默。异常时同时让任务标红，GitHub 会另发一封
 失败邮件，等于多一条免费通道。
+
+外部心跳（可选）：配置 HEARTBEAT_URL 后，本脚本每次跑完会向第三方心跳服务
+报一次平安。若本巡检自己没运行（GitHub 整体故障、workflow 被拦、定时调度
+丢失），ping 就不会发出，外部服务在宽限期后主动告警，兜住最后一环。
 """
 
 import datetime
@@ -164,6 +168,34 @@ def push_wecom(text):
         return False
 
 
+def ping_heartbeat(attempts=3):
+    """巡检本身跑完后，向外部心跳服务报一次平安。
+
+    关键：只有本脚本真正执行到这里才会 ping。若 GitHub 整体故障、workflow
+    被禁用/被风控挂起、定时调度丢失或脚本中途崩溃，ping 就不会发出，
+    外部服务在宽限期过后主动告警 —— 这正好兜住「巡检自己没运行」。
+    未配置 HEARTBEAT_URL 时完全跳过，不影响原有巡检结论。
+    """
+    url = (os.environ.get("HEARTBEAT_URL") or "").strip()
+    if not url:
+        print("[心跳] 未配置 HEARTBEAT_URL，跳过（不影响巡检结论）")
+        return None
+    for i in range(attempts):
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "checkin-watchdog"}, method="GET")
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                code = resp.status
+            print("[心跳] 已报平安 HTTP %s" % code)
+            return True
+        except Exception as exc:
+            if i < attempts - 1:
+                time.sleep(1.5 * (i + 1))
+            else:
+                print("[心跳] 报平安失败（不影响巡检结论）：%s" % str(exc)[:110])
+    return False
+
+
 def build_alert(bad, now):
     lines = ["⚠️ 签到巡检异常（%s 北京时间）" % now.astimezone(BEIJING).strftime("%m-%d %H:%M"), ""]
     for item in bad:
@@ -195,19 +227,22 @@ def main():
     force = (os.environ.get("WATCH_FORCE_ALERT") or "").strip().lower() in ("1", "true", "yes")
     if not bad and not force:
         print("全部正常，本次不推送")
-        return 0
+        rc = 0
+    else:
+        testing = force and not bad
+        if testing:
+            bad = [{"label": "通道自检", "repo": "checkin-watchdog",
+                    "reason": "这是一条测试告警，五个项目当前都正常，忽略即可"}]
+        text = build_alert(bad, now)
+        print("--- 推送内容 ---")
+        print(text)
+        ok = push_wecom(text)
+        rc = (0 if ok else 1) if testing else 1
 
-    testing = force and not bad
-    if testing:
-        bad = [{"label": "通道自检", "repo": "checkin-watchdog",
-                "reason": "这是一条测试告警，五个项目当前都正常，忽略即可"}]
-    text = build_alert(bad, now)
-    print("--- 推送内容 ---")
-    print(text)
-    ok = push_wecom(text)
-    if testing:
-        return 0 if ok else 1
-    return 1
+    # 巡检确实跑完了就报平安；发现别人异常也要报（心跳只管「巡检在不在」）。
+    # 缺 WATCH_PAT 时上面已 return 2，不会走到这里，避免误报平安。
+    ping_heartbeat()
+    return rc
 
 
 if __name__ == "__main__":

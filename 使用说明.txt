@@ -26,15 +26,26 @@
   GitHub 还会另发一封失败邮件，等于双通道。
   想手动验证推送通道：Actions 页面运行本 workflow，勾选「发一条测试告警」。
 
-【配置】仓库 Secrets（已配好，一般不用动）
-  WATCH_PAT   能读取这五个私有仓库 Actions 运行记录的令牌
-  WECOM_APP   corpid,corpsecret,touser,agentid（和其他项目同一个企微）
+【配置】仓库 Secrets
+  WATCH_PAT      能读取五个私有仓库 Actions 运行记录的令牌（已配好）
+  WECOM_APP      corpid,corpsecret,touser,agentid（已配好）
+  HEARTBEAT_URL  可选：第三方心跳服务的 ping 地址，不填就跳过心跳
+
+【外部心跳（可选，兜住「巡检自己没运行」）】
+  配好 HEARTBEAT_URL 后，巡检每次真正跑完会向该地址发一次 GET 报平安。
+  外部服务设成「每天 UTC 13:00（北京 21:00）应收一次，宽限 2 小时」：
+    · 按时收到 → 保持沉默，手机不打扰
+    · 北京 23:00 还没收到 → 服务主动把告警推到手机
+  全程云端自动：ping 由 GitHub Actions 发出，不需要开电脑、不用人工操作。
+  免费服务可用 healthchecks.io（免费 20 个检查、不需要信用卡）；
+  任何支持「超时未 ping 告警」的服务都行，这里只认一个 URL，没有绑定。
+  注意：心跳只表示「巡检跑过了」，不代表五个项目都签到成功；
+  后者仍由本巡检每天 21:00 判定并按需推企微。
 
 【已知边界】
-  巡检只在异常时推，所以「巡检自己没运行」仍然需要靠人发现：
-  若某天 21:00 之后既没收到告警、又想确认巡检确实跑过，
-  打开 https://github.com/caiping527/checkin-watchdog/actions 看一眼即可。
-  要彻底闭环可再加一个第三方心跳服务（超时未 ping 主动告警）。
+  不配 HEARTBEAT_URL 时，巡检只在异常时推，所以「巡检自己没运行」
+  仍需靠人发现：21:00 后打开 .../actions 看一眼有没有当天绿勾。
+  配好外部心跳后，这一环才真正闭环。
 
 【调整】
   改检查时间：.github/workflows/watch.yml 里的 cron（UTC，减 8 小时换算北京）
