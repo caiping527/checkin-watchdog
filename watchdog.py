@@ -14,6 +14,10 @@
      （例如 action_required、failure、queued 超时：0 个 job，等于没跑）
   · 签到跑起来了但业务失败：不归本巡检管，各项目自己会推失败提醒
 
+工作流自愈：每天额外检查各项目 workflow 是否被 GitHub 停用（例如 60 天
+无活动自动禁用）。发现 disabled_* 状态时用 API 自动重新启用，并在告警里
+写明「停在哪、已经做了什么、还要你做什么」，不再只报一句「没运行」。
+
 只在有异常时推送；全绿时完全静默。异常时同时让任务标红，GitHub 会另发一封
 失败邮件，等于多一条免费通道。
 
@@ -79,6 +83,61 @@ def api_get(path, token, attempts=3):
             if i < attempts - 1:
                 time.sleep(1.5 * (i + 1))
     raise last
+
+
+def enable_workflow(repo, workflow_id, token):
+    """重新启用被 GitHub 停用的 workflow。需要令牌带 repo / actions:write 权限。"""
+    path = "/repos/%s/%s/actions/workflows/%s/enable" % (OWNER, repo, workflow_id)
+    try:
+        req = urllib.request.Request(
+            API_ROOT + path,
+            data=b"",
+            method="PUT",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": "Bearer " + token,
+                "User-Agent": "checkin-watchdog",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return resp.status in (200, 204)
+    except Exception as exc:
+        print("  [自愈] 重新启用 %s 失败：%s" % (repo, str(exc)[:110]))
+        return False
+
+
+def ensure_enabled(repo, token):
+    """检查 workflow 是否被停用；能自动开就自动开，返回给告警用的说明。
+
+    主动检查而不等它「今天没运行」才查：有些工作流是当天跑完后才被停用的，
+    提前发现并开回来，第二天才不会断。
+    """
+    try:
+        data = api_get("/repos/%s/%s/actions/workflows?per_page=30" % (OWNER, repo), token)
+    except Exception as exc:
+        print("  [自愈] 读取 %s 工作流状态失败：%s" % (repo, str(exc)[:110]))
+        return []
+    disabled = [w for w in (data.get("workflows") or [])
+                if w.get("state") not in ("active", "deleted")]
+    if not disabled:
+        return []
+
+    notes = []
+    for wf in disabled:
+        state = wf.get("state") or "未知状态"
+        name = wf.get("name") or wf.get("path") or "workflow"
+        if state.startswith("disabled_") and wf.get("id"):
+            if enable_workflow(repo, wf["id"], token):
+                print("  [自愈] %s：%s 被停用(%s)，已自动重新启用" % (repo, name, state))
+                notes.append("工作流「%s」曾被 GitHub 停用(%s)，已自动重新启用；明天恢复，想立刻补签点 Run workflow"
+                             % (name, state))
+            else:
+                notes.append("工作流「%s」被停用(%s)，自动重开失败：请到 Actions 页点 Enable workflow"
+                             % (name, state))
+        else:
+            notes.append("工作流「%s」状态异常 %s，请到 Actions 页检查" % (name, state))
+    return notes
 
 
 def check_one(repo, label, token, since):
@@ -196,13 +255,29 @@ def ping_heartbeat(attempts=3):
     return False
 
 
+FIX_GUIDE = [
+    "1 被停用：Actions 页黄色横幅点 Enable workflow；本巡检已会自动重开",
+    "2 待审核 action_required：只发生在公开仓库，现已全转私仓；万一出现点 Approve",
+    "3 排队卡住 queued：GitHub 调度拥堵，等下次自动恢复，或手动 Run workflow",
+    "4 运行失败 failure：点红色 run 看日志，多半是登录态/密码过期，重跑密码登录",
+    "5 没运行也没横幅：直接点 Run workflow 手动补签，越早越好",
+]
+
+
 def build_alert(bad, now):
     lines = ["⚠️ 签到巡检异常（%s 北京时间）" % now.astimezone(BEIJING).strftime("%m-%d %H:%M"), ""]
     for item in bad:
         lines.append("• %s：%s" % (item["label"], item["reason"]))
+        for note in (item.get("notes") or []):
+            lines.append("  → %s" % note)
         lines.append("  github.com/%s/%s/actions" % (OWNER, item["repo"]))
     lines.append("")
-    lines.append("巡检只查有没有运行；签到跑起来后的失败由各项目自己推送。")
+    lines.append("【停了怎么解决】")
+    lines.extend(FIX_GUIDE)
+    lines.append("")
+    lines.append("若连这条巡检消息都没收到 = 巡检仓库自己也停了：")
+    lines.append("github.com/caiping527/checkin-watchdog/actions → Enable / Run workflow")
+    lines.append("巡检只查有没有运行；签到业务失败由各项目自己推送。")
     return "\n".join(lines)
 
 
@@ -218,10 +293,21 @@ def main():
 
     print("=== 签到巡检 %s（北京时间，判定起点 %s）===" % (
         now.astimezone(BEIJING).strftime("%Y-%m-%d %H:%M"), bj_day.strftime("%m-%d 00:00")))
+
+    print("--- 工作流状态自愈 ---")
+    state_notes = {}
+    for repo, label in TARGETS:
+        state_notes[repo] = ensure_enabled(repo, token)
+    if not any(state_notes.values()):
+        print("  五个项目的 workflow 均为 active，无需处理")
+
     results = [check_one(repo, label, token, since) for repo, label in TARGETS]
     for item in results:
+        item["notes"] = state_notes.get(item["repo"]) or []
         print("  [%s] %-11s %-24s %s" % (
             "OK" if item["ok"] else "!!", item["label"], item["repo"], item["reason"]))
+        for note in item["notes"]:
+            print("      -> %s" % note)
 
     bad = [x for x in results if not x["ok"]]
     force = (os.environ.get("WATCH_FORCE_ALERT") or "").strip().lower() in ("1", "true", "yes")
