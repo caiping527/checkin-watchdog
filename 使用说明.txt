@@ -162,8 +162,17 @@
         $NAME / $STATUS / $NOW 由 Healthchecks 自动替换。Up 事件只在真出过
         故障后触发一次，会回一条「已恢复」，方便确认修好了。
 
-        令牌建议用 fine-grained PAT：只勾 checkin-watchdog 一个仓库、
-        Contents: Read and write，别用全账号通用令牌；泄漏时可随时单独吊销。
+        令牌（为什么网页上看不到）：GitHub 的 Personal access token 只在
+        创建成功那一刻显示一次，之后网页列表、详情页和任何 API 都取不回
+        明文；点进已有的 workbuddy 只能改名 / 改权限 / 删除。想「查看」
+        只能 Delete 后重新 Generate，反而多一个新令牌。
+        本机 gh CLI 已保存截图里那个 workbuddy classic token
+        （scopes: repo, user, workflow），直接复用即可，不用新建：
+        本机执行 gh auth token 可取回（值别贴到聊天、别提交 git）。
+        2026-11-09 已实测用它带 Bearer 头访问 GitHub API 返回 200。
+        注意 classic token 权限覆盖全部仓库，填进 Healthchecks 后由第三方
+        保管；若以后想收紧，再建 fine-grained PAT 只勾 checkin-watchdog
+        一个仓库、Contents: Read and write，泄漏时可单独吊销。
         repository_dispatch 要求对该仓库有写权限，只读令牌会返回 404。
 
         配置页有 Test 按钮：点一下会触发一次真实 Down 告警，手机收到即通。
