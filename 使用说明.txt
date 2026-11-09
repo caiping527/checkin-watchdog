@@ -139,6 +139,11 @@
         已实测可达。Healthchecks 在境外，但目标是 api.github.com，比直连
         qyapi.weixin.qq.com 更稳。
 
+        ⚠️ Healthchecks 的 Webhook 表单里 Method 默认是 GET，此时界面上
+        **没有** Request body 输入框（截图里看不到属正常）。先把 Down 和
+        Up 两组的 Method 都改成 POST，Request body 才会出现。两组字段都是
+        必填，Headers 也要两组各填一次，别只填左边。
+
         Down 组：
           Method   POST
           URL      https://api.github.com/repos/caiping527/checkin-watchdog/dispatches
