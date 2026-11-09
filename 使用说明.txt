@@ -143,6 +143,11 @@
         **没有** Request body 输入框（截图里看不到属正常）。先把 Down 和
         Up 两组的 Method 都改成 POST，Request body 才会出现。两组字段都是
         必填，Headers 也要两组各填一次，别只填左边。
+        ⚠️ 第二个坑：两个 Request Headers 框里预填了示例文字
+          X-Sample-Header: $NAME has gone down / $NAME is back up
+        那只是占位示例，必须在框内 Ctrl+A 全选删掉，换成下面 4 行真实
+        认证头。留着示例等于没带 Authorization，GitHub 返回 401，
+        Healthchecks 判失败并重试 2 次，微信收不到任何消息。
 
         Down 组：
           Method   POST
