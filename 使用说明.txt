@@ -1,0 +1,42 @@
+签到巡检（独立于所有签到项目）
+
+【它解决什么】
+以前告警代码长在签到任务里面，任务没启动时告警代码也一起没启动，
+所以「几天没运行」这种最严重的情况反而一条消息都没有。
+本仓库是独立的第三方检查者，每天北京时间 21:00 用 GitHub API
+检查五个项目「今天有没有真正跑起来」，发现异常才推企业微信。
+
+【检查范围】
+  迅维网        chinafix-sign
+  Hyperdown     hyperdown-checkin
+  WorkBuddy     workbuddy-checkin-public
+  小浣熊        raccoon-checkin
+  天翼云盘      Cloud189Checkin
+
+【判定口径】只查有没有运行，不查业务是否签到成功
+  · 今天有成功完成的运行           → 正常，静默
+  · 今天正在运行 / 刚排队          → 正常，不误报
+  · 今天一次都没运行               → 异常，推送
+  · 今天有运行但被拦、失败、排队超时 → 异常，推送
+    （action_required / failure / queued 卡住，都是 0 个 job，等于没跑）
+  · 签到跑起来了但失败：各项目自己会推，本巡检不重复判断
+
+【推送策略】
+  全绿时完全不打扰；有异常才推一条企微，并把本次巡检任务标红，
+  GitHub 还会另发一封失败邮件，等于双通道。
+  想手动验证推送通道：Actions 页面运行本 workflow，勾选「发一条测试告警」。
+
+【配置】仓库 Secrets（已配好，一般不用动）
+  WATCH_PAT   能读取这五个私有仓库 Actions 运行记录的令牌
+  WECOM_APP   corpid,corpsecret,touser,agentid（和其他项目同一个企微）
+
+【已知边界】
+  巡检只在异常时推，所以「巡检自己没运行」仍然需要靠人发现：
+  若某天 21:00 之后既没收到告警、又想确认巡检确实跑过，
+  打开 https://github.com/caiping527/checkin-watchdog/actions 看一眼即可。
+  要彻底闭环可再加一个第三方心跳服务（超时未 ping 主动告警）。
+
+【调整】
+  改检查时间：.github/workflows/watch.yml 里的 cron（UTC，减 8 小时换算北京）
+  增删项目：watchdog.py 顶部的 TARGETS 列表
+  排队多久算卡住：workflow 里的 WATCH_STALE_QUEUED_MIN（默认 90 分钟）

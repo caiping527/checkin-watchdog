@@ -1,0 +1,30 @@
+name: 签到巡检（只查有没有运行）
+
+on:
+  schedule:
+    # UTC 13:00 = 北京时间 21:00；所有签到项目都在早上跑完，这个点还没跑就算异常
+    - cron: '0 13 * * *'
+  workflow_dispatch:
+    inputs:
+      force_alert:
+        description: '发一条测试告警到手机（验证推送通道）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: 检查各项目今天有没有运行
+        env:
+          WATCH_PAT: ${{ secrets.WATCH_PAT }}
+          WECOM_APP: ${{ secrets.WECOM_APP }}
+          WATCH_FORCE_ALERT: ${{ inputs.force_alert }}
+          WATCH_STALE_QUEUED_MIN: '90'
+        run: python3 watchdog.py
