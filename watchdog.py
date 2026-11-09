@@ -22,6 +22,7 @@ import datetime
 import json
 import os
 import sys
+import time
 import urllib.parse
 import urllib.request
 
@@ -51,27 +52,38 @@ def bj_text(dt):
     return dt.astimezone(BEIJING).strftime("%m-%d %H:%M")
 
 
-def api_get(path, token):
-    req = urllib.request.Request(
-        API_ROOT + path,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": "Bearer " + token,
-            "User-Agent": "checkin-watchdog",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        return json.loads(resp.read().decode("utf-8", "replace"))
+def api_get(path, token, attempts=3):
+    """GitHub 偶尔会把大响应截断（IncompleteRead），重试并缩小单页条数。"""
+    last = None
+    for i in range(attempts):
+        try:
+            req = urllib.request.Request(
+                API_ROOT + path,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": "Bearer " + token,
+                    "User-Agent": "checkin-watchdog",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                    "Accept-Encoding": "identity",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                raw = resp.read()
+            return json.loads(raw.decode("utf-8", "replace"))
+        except Exception as exc:
+            last = exc
+            if i < attempts - 1:
+                time.sleep(1.5 * (i + 1))
+    raise last
 
 
 def check_one(repo, label, token, since):
     base = {"repo": repo, "label": label, "ok": False, "reason": ""}
     try:
         data = api_get(
-            "/repos/%s/%s/actions/runs?per_page=30" % (OWNER, repo), token)
+            "/repos/%s/%s/actions/runs?per_page=10" % (OWNER, repo), token)
     except Exception as exc:
-        base["reason"] = "巡检读取失败：%s" % str(exc)[:110]
+        base["reason"] = "巡检读取失败（重试3次）：%s" % str(exc)[:90]
         return base
 
     runs = data.get("workflow_runs") or []
