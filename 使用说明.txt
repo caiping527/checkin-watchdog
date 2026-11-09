@@ -181,6 +181,14 @@
         repository_dispatch 要求对该仓库有写权限，只读令牌会返回 404。
 
         配置页有 Test 按钮：点一下会触发一次真实 Down 告警，手机收到即通。
+        ⚠️ Test 的两个特点（2026-11-09 实测，run 42622001023）：
+          · Test 把 $NAME 替换成 TEST、$STATUS 替换成 down，消息里会显示
+            「第三方心跳没收到今天的报平安：TEST（状态 down）」。
+            文案看着像真故障，其实只是测试，忽略即可；真实 Down 时
+            $NAME 才是「签到巡检」。
+          · Test 只发通知，不改变 check 状态（仍是 Up），也不用事后补
+            ping 恢复。此轮 heartbeat_alert job 跑、watch job 自动
+            skipped，且全程不发报平安 ping，不会把故障误记成正常。
   5) 验证闭环
      · 首次激活（最容易漏）：官方把「从未收到 ping」的 check 标为 New 状态，
        告警只在 check 进入 Down 时发出。所以配好 HEARTBEAT_URL 后，
