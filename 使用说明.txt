@@ -3,7 +3,7 @@
 【它解决什么】
 以前告警代码长在签到任务里面，任务没启动时告警代码也一起没启动，
 所以「几天没运行」这种最严重的情况反而一条消息都没有。
-本仓库是独立的第三方检查者，每天北京时间 21:00 用 GitHub API
+本仓库是独立的第三方检查者，每天北京时间 19:00 用 GitHub API
 检查五个项目「今天有没有真正跑起来」，发现异常才推企业微信。
 
 【检查范围】
@@ -33,14 +33,14 @@
 
 【外部心跳（可选，兜住「巡检自己没运行」）】
   配好 HEARTBEAT_URL 后，巡检每次真正跑完会向该地址发一次 GET 报平安。
-  外部服务设成「每天 UTC 13:00（北京 21:00）应收一次，宽限 2 小时」：
+  外部服务设成「每天 UTC 11:00（北京 19:00）应收一次，宽限 1 小时」：
     · 按时收到 → 保持沉默，手机不打扰
-    · 北京 23:00 还没收到 → 服务主动把告警推到手机
+    · 北京 20:00 还没收到 → 服务主动把告警推到手机
   全程云端自动：ping 由 GitHub Actions 发出，不需要开电脑、不用人工操作。
   免费服务可用 healthchecks.io（免费 20 个检查、不需要信用卡）；
   任何支持「超时未 ping 告警」的服务都行，这里只认一个 URL，没有绑定。
   注意：心跳只表示「巡检跑过了」，不代表五个项目都签到成功；
-  后者仍由本巡检每天 21:00 判定并按需推企微。
+  后者仍由本巡检每天 19:00 判定并按需推企微。
 
 【为什么会自动停：三种「停」不是一回事】
   1) 风控挂起（GitHub 2026-07-28 新规）
@@ -70,12 +70,26 @@
   末尾固定附「停了怎么解决」5 步速查（含手动补签入口 Run workflow），
   以及「连巡检消息都没收到时该去哪里点启用」。
 
+【为什么定在 19:00 检查 / 20:00 告警】
+  五个项目 cron 的名义时间（北京）是 08:05 / 08:13 / 09:00 / 09:17 / 10:35，
+  但 GitHub Actions 定时排队会延迟 5~8 小时，2026-11-09 实际跑完分别是
+  13:45 / 13:53 / 15:48 / 17:34 / 18:10，最晚的是天翼云盘。
+  所以巡检不能早于 18:30，否则会把「还在排队」误判成「没运行」。
+  现在 19:00 检查（项目级告警当时就发）、Grace 1 小时（心跳 20:00 告警），
+  比原来的 21:00 检查 / 23:00 告警提前约 3 小时，白天还能处理。
+  余量约 50 分钟。巡检对「当天已创建但还在排队/运行中」的 run 判正常，
+  所以只要 GitHub 在 19:00 前把当天 run 建出来就不会误报；万一某天调度
+  更晚，可能误报一次，告警里带处置步骤，可忽略或手动 Run workflow 补跑。
+  不建议靠「把项目 cron 换到别的时段」来消除排队：那是 GitHub 全局调度
+  行为，换时段能否改善未经观测验证，改动大且要观察好几天，不划算。
+
 【已知边界】
   不配 HEARTBEAT_URL 时，巡检只在异常时推，所以「巡检自己没运行」
-  仍需靠人发现：21:00 后打开 .../actions 看一眼有没有当天绿勾。
+  仍需靠人发现：19:00 后打开 .../actions 看一眼有没有当天绿勾。
   配好外部心跳后，这一环才真正闭环。
   自动重新启用需要 WATCH_PAT 带 repo / actions:write 权限；权限不足时
   会在告警里明确提示「请到 Actions 页点 Enable workflow」。
+  巡检目前不区分 run 的触发方式，手动 workflow_dispatch 也算「今天运行过」。
 
 【路线 ①：外部心跳完整落地（推荐，改动最小）】
   目标：让第三方服务在「巡检自己没运行」时主动推企微，闭掉最后一个死结。
@@ -86,8 +100,8 @@
      免费 Hobbyist 给 20 个 check，本方案只用 1 个。
   2) 新建 1 个 check
      Name:     签到巡检
-     Schedule: Cron，表达式 0 13 * * *  （UTC 13:00 = 北京 21:00）
-     Grace:    2 小时                  （北京 23:00 没 ping 才告警）
+     Schedule: Cron，表达式 0 11 * * *  （UTC 11:00 = 北京 19:00）
+     Grace:    1 小时                  （北京 20:00 没 ping 才告警）
      Timezone: 保持 UTC，别再手动换算，否则会差 8 小时
   3) 复制该 check 的 Ping URL（形如 https://hc-ping.com/xxxxxxxx）
      本仓库 Settings > Secrets and variables > Actions > New repository secret
@@ -102,10 +116,10 @@
         {"msgtype":"text","text":{"content":"⚠️ 心跳超时：$NAME 状态 $STATUS\n说明：签到巡检今天没按时报平安，五个项目今天没人检查。\n怎么办：\n1 打开 github.com/caiping527/checkin-watchdog/actions\n2 有黄色横幅点 Enable workflow\n3 点 Run workflow 手动跑一次巡检\n4 看五个项目当天有没有签到，缺的点 Run workflow 补签\n常见原因：工作流被停用、WATCH_PAT 过期、GitHub 调度故障。"}}
         $NAME / $STATUS 由 Healthchecks 自动替换，能点名是哪个 check。
         配置页有 Test 按钮：点一下手机收到，就说明境外->企微这条链路通；
-        收不到就只靠 Email，或改由 21:00 巡检读 Healthchecks API 后再推企微。
+        收不到就只靠 Email，或改由 19:00 巡检读 Healthchecks API 后再推企微。
   5) 验证闭环
-     · 正常：北京 21:00 巡检跑完 -> Healthchecks 显示 Up -> 手机不打扰。
-     · 模拟故障：临时把 HEARTBEAT_URL 改成错误地址，等 23:00 后看 Email /
+     · 正常：北京 19:00 巡检跑完 -> Healthchecks 显示 Up -> 手机不打扰。
+     · 模拟故障：临时把 HEARTBEAT_URL 改成错误地址，等 20:00 后看 Email /
        企微有没有告警；验证完改回来。
      · 或在本仓库 Actions 手动 Run workflow 一次，Healthchecks 的 Last Ping
        应立即刷新成当前时间。
@@ -125,7 +139,7 @@
   Webhook URL 使用，不要塞进 WECOM_APP。
 
 【心跳告警怎么到手机（最容易搞混的一点）】
-  21:00 巡检现在用的是「企业微信自建应用」：要先 gettoken 拿凭证、再
+  19:00 巡检现在用的是「企业微信自建应用」：要先 gettoken 拿凭证、再
   message/send 发消息，两步 HTTP。这条通道已实测可用，但 Healthchecks 的
   Webhook 一次只能发一个请求，做不了两步，所以心跳告警不能走自建应用，
   要改走「企业微信群机器人 Webhook」：一个 POST 直达，群消息同样在手机
@@ -140,12 +154,13 @@
   只是推送通道、不会自己判超时，还得另配定时检查，不建议为了这个加一层。
 
   【完整链路】
-  平时：巡检 21:00 跑完 -> GET HEARTBEAT_URL -> Healthchecks 记 Up -> 静默。
-  出事：巡检没跑 / 被停用 / GitHub 调度丢失 -> 23:00 没 ping -> Down
+  平时：巡检 19:00 跑完 -> GET HEARTBEAT_URL -> Healthchecks 记 Up -> 静默。
+  出事：巡检没跑 / 被停用 / GitHub 调度丢失 -> 20:00 没 ping -> Down
         -> Healthchecks 自己 POST 群机器人 Webhook + 发 Email -> 手机响。
   这条链路完全不依赖 GitHub，正是为了兜住「连巡检都没运行」。
 
 【调整】
   改检查时间：.github/workflows/watch.yml 里的 cron（UTC，减 8 小时换算北京）
+    必须同时把 Healthchecks check 的 Cron 表达式改成同一个值，两边不一致会天天误报。
   增删项目：watchdog.py 顶部的 TARGETS 列表
   排队多久算卡住：workflow 里的 WATCH_STALE_QUEUED_MIN（默认 90 分钟）
