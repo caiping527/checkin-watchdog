@@ -142,6 +142,12 @@
         配置页有 Test 按钮：点一下手机收到，就说明境外->企微这条链路通；
         收不到就只靠 Email，或改由 14:07 巡检读 Healthchecks API 后再推企微。
   5) 验证闭环
+     · 首次激活（最容易漏）：官方把「从未收到 ping」的 check 标为 New 状态，
+       告警只在 check 进入 Down 时发出。所以配好 HEARTBEAT_URL 后，
+       务必先手动 Run workflow 一次，让 Last Ping 从 Never 变成当前时间、
+       状态变成 Up，这条链路才算真正通电并有基线；在此之前不要指望它兜底。
+       检查列表里若一直显示 Last Ping: Never，说明 GitHub Secret 没配、
+       或巡检根本没跑到发 ping 那一步，先排查这两处。
      · 正常：北京 14:07 巡检跑完 -> Healthchecks 显示 Up -> 手机不打扰。
      · 模拟故障：临时把 HEARTBEAT_URL 改成错误地址，等 15:07 后看 Email /
        企微有没有告警；验证完改回来。
