@@ -245,6 +245,25 @@ CHECK_REPOS = {
     "签到-迅维网": "chinafix-sign",
 }
 
+# 自动心跳监测程序（D:\自动心跳监测）维护的映射，支持多账号和新增项目。
+CHECKS_MAP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "checks_map.json")
+
+
+def load_check_repos():
+    """优先读自动维护的映射；文件不存在/损坏时回退内置清单。
+
+    value 写成 "repo" 表示本 OWNER 名下，写成 "owner/repo" 可指向其它账号。
+    """
+    try:
+        with open(CHECKS_MAP_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and data:
+            return {str(k): str(v) for k, v in data.items()}
+    except Exception:  # noqa: BLE001
+        pass
+    return dict(CHECK_REPOS)
+
 
 def build_heartbeat_alert(name, status, now):
     """第三方心跳判超时后的告警。这条消息由 Healthchecks 经 GitHub 触发，
@@ -256,16 +275,20 @@ def build_heartbeat_alert(name, status, now):
     stamp = now.astimezone(BEIJING).strftime("%m-%d %H:%M")
     label = name or "未知项目"
     state = status or "Down"
-    repo = CHECK_REPOS.get(label)
+    repo = load_check_repos().get(label)
     if repo:
+        if "/" in repo:
+            owner, name = repo.split("/", 1)
+        else:
+            owner, name = OWNER, repo
         return "\n".join([
             "⚠️ 项目签到未上报（%s 北京时间）" % stamp,
             "",
             "第三方心跳没收到今天的成功上报：%s（状态 %s）" % (label, state),
-            "说明：该项目今天没跑完签到，或跑完但失败。五个项目各自独立监控，缺谁报谁。",
+            "说明：该项目今天没跑完签到，或跑完但失败。各项目独立监控，缺谁报谁。",
             "",
             "【怎么处理】",
-            "1 打开 github.com/caiping527/%s/actions" % repo,
+            "1 打开 github.com/%s/%s/actions" % (owner, name),
             "2 看今天有没有红色 run，点进去看日志",
             "3 有黄色横幅就点 Enable workflow",
             "4 点 Run workflow 手动补签",
@@ -274,7 +297,7 @@ def build_heartbeat_alert(name, status, now):
     return "\n".join([
         "⚠️ 心跳来源未知（%s 北京时间）" % stamp,
         "",
-        "收到一个不在五个项目清单里的心跳事件：%s（状态 %s）" % (label, state),
+        "收到一个不在项目清单里的心跳事件：%s（状态 %s）" % (label, state),
         "多半是 Healthchecks 的 Test 自检或残留 check，非真实故障。",
         "",
         "【怎么处理】",
@@ -291,15 +314,23 @@ def send_heartbeat_event():
     只做推送，不跑巡检、不发任何报平安 ping，避免把故障误记成正常。
     """
     event = (os.environ.get("HC_EVENT") or "heartbeat_down").strip()
+    test = (os.environ.get("HC_TEST") or "").strip().lower() in ("1", "true", "yes")
     if event == "heartbeat_up":
         label = os.environ.get("HC_NAME") or "未知项目"
         text = "✅ %s 已恢复上报（%s 北京时间），忽略即可" % (
             label, utcnow().astimezone(BEIJING).strftime("%m-%d %H:%M"))
+    elif test:
+        label = os.environ.get("HC_NAME") or "自动心跳监测"
+        text = "\n".join([
+            "✅ 自动心跳监测 · 配置自检通过（%s 北京时间）"
+            % utcnow().astimezone(BEIJING).strftime("%m-%d %H:%M"),
+            "",
+            "心跳配置已完成，告警链路验证成功：%s" % label,
+            "这条消息只验证通道，不代表任何项目签到失败，忽略即可。",
+        ])
     else:
         text = build_heartbeat_alert(
             os.environ.get("HC_NAME"), os.environ.get("HC_STATUS"), utcnow())
-        if (os.environ.get("HC_TEST") or "").strip().lower() in ("1", "true", "yes"):
-            text = "【链路自检，非真实故障，忽略即可】\n" + text
     print("--- 心跳事件 %s 推送内容 ---" % event)
     print(text)
     return 0 if push_wecom(text) else 1
