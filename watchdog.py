@@ -21,9 +21,9 @@
 只在有异常时推送；全绿时完全静默。异常时同时让任务标红，GitHub 会另发一封
 失败邮件，等于多一条免费通道。
 
-外部心跳（可选）：配置 HEARTBEAT_URL 后，本脚本每次跑完会向第三方心跳服务
-报一次平安。若本巡检自己没运行（GitHub 整体故障、workflow 被拦、定时调度
-丢失），ping 就不会发出，外部服务在宽限期后主动告警，兜住最后一环。
+第三方告警由五个项目在签到成功后各自向自己的 Healthchecks check 上报，
+不依赖本巡检是否按时运行；本脚本只负责检查运行记录、自动重开被停用的
+workflow，以及在异常时点名推送。
 """
 
 import datetime
@@ -227,34 +227,6 @@ def push_wecom(text):
         return False
 
 
-def ping_heartbeat(attempts=3):
-    """巡检本身跑完后，向外部心跳服务报一次平安。
-
-    关键：只有本脚本真正执行到这里才会 ping。若 GitHub 整体故障、workflow
-    被禁用/被风控挂起、定时调度丢失或脚本中途崩溃，ping 就不会发出，
-    外部服务在宽限期过后主动告警 —— 这正好兜住「巡检自己没运行」。
-    未配置 HEARTBEAT_URL 时完全跳过，不影响原有巡检结论。
-    """
-    url = (os.environ.get("HEARTBEAT_URL") or "").strip()
-    if not url:
-        print("[心跳] 未配置 HEARTBEAT_URL，跳过（不影响巡检结论）")
-        return None
-    for i in range(attempts):
-        try:
-            req = urllib.request.Request(
-                url, headers={"User-Agent": "checkin-watchdog"}, method="GET")
-            with urllib.request.urlopen(req, timeout=12) as resp:
-                code = resp.status
-            print("[心跳] 已报平安 HTTP %s" % code)
-            return True
-        except Exception as exc:
-            if i < attempts - 1:
-                time.sleep(1.5 * (i + 1))
-            else:
-                print("[心跳] 报平安失败（不影响巡检结论）：%s" % str(exc)[:110])
-    return False
-
-
 FIX_GUIDE = [
     "1 被停用：Actions 页黄色横幅点 Enable workflow；本巡检已会自动重开",
     "2 待审核 action_required：只发生在公开仓库，现已全转私仓；万一出现点 Approve",
@@ -278,11 +250,11 @@ def build_heartbeat_alert(name, status, now):
     """第三方心跳判超时后的告警。这条消息由 Healthchecks 经 GitHub 触发，
     不经过本巡检程序，所以能兜住「巡检自己完全没跑」。
 
-    name 是 Healthchecks 的 check 名：项目级 check 点名到具体仓库，
-    原有的「签到巡检」check 保留兼容巡检自身超时的文案。
+    name 是 Healthchecks 的 check 名：项目级 check 点名到具体仓库；
+    名字不在清单里时给一条通用兜底文案（多为链路自检或残留配置）。
     """
     stamp = now.astimezone(BEIJING).strftime("%m-%d %H:%M")
-    label = name or "签到巡检"
+    label = name or "未知项目"
     state = status or "Down"
     repo = CHECK_REPOS.get(label)
     if repo:
@@ -300,29 +272,27 @@ def build_heartbeat_alert(name, status, now):
             "常见原因：GitHub 定时调度积压、登录态/密码过期、Secret 失效。",
         ])
     return "\n".join([
-        "⚠️ 签到巡检心跳超时（%s 北京时间）" % stamp,
+        "⚠️ 心跳来源未知（%s 北京时间）" % stamp,
         "",
-        "第三方心跳没收到今天的报平安：%s（状态 %s）" % (label, state),
-        "说明：checkin-watchdog 巡检仓库今天没跑起来，五个签到项目今天没人检查。",
-        "这条告警由心跳服务触发，不经过 GitHub 巡检程序。",
+        "收到一个不在五个项目清单里的心跳事件：%s（状态 %s）" % (label, state),
+        "多半是 Healthchecks 的 Test 自检或残留 check，非真实故障。",
         "",
-        "【停了怎么解决】",
-        "1 打开 github.com/caiping527/checkin-watchdog/actions",
-        "2 有黄色横幅就点 Enable workflow",
-        "3 点 Run workflow 手动跑一次巡检",
-        "4 再看五个项目当天有没有签到，缺的点 Run workflow 补签",
-        "常见原因：巡检工作流被停用、WATCH_PAT 过期、GitHub 调度故障。",
+        "【怎么处理】",
+        "1 打开 Healthchecks 检查列表，确认五个「签到-xxx」check 是否 Down",
+        "2 缺谁点谁：github.com/caiping527/<对应仓库>/actions → Run workflow 补签",
+        "3 本仓库 Actions 页可看这条推送的运行日志",
+        "常见原因：Test 按钮、check 改名、旧配置残留。",
     ])
 
 
 def send_heartbeat_event():
     """由 repository_dispatch 触发：把心跳的 Down/Up 事件推到微信。
 
-    绝不调用 ping_heartbeat()，否则会把一次「故障告警」误当成巡检报平安。
+    只做推送，不跑巡检、不发任何报平安 ping，避免把故障误记成正常。
     """
     event = (os.environ.get("HC_EVENT") or "heartbeat_down").strip()
     if event == "heartbeat_up":
-        label = os.environ.get("HC_NAME") or "签到巡检"
+        label = os.environ.get("HC_NAME") or "未知项目"
         text = "✅ %s 已恢复上报（%s 北京时间），忽略即可" % (
             label, utcnow().astimezone(BEIJING).strftime("%m-%d %H:%M"))
     else:
@@ -401,9 +371,6 @@ def main():
         ok = push_wecom(text)
         rc = (0 if ok else 1) if testing else 1
 
-    # 巡检确实跑完了就报平安；发现别人异常也要报（心跳只管「巡检在不在」）。
-    # 缺 WATCH_PAT 时上面已 return 2，不会走到这里，避免误报平安。
-    ping_heartbeat()
     return rc
 
 

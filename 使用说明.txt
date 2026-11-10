@@ -28,7 +28,7 @@
   14:00  项目直报告警：五个专属 check 到点没收到成功上报，缺谁点名谁
          （各自 Cron 0 16 * * * UTC + Grace 14 小时）
   14:07  巡检跑一次：辅助点名 + 自动重开 workflow（UTC 06:07）
-  ── 旧的「15:07 巡检自身心跳告警」已停用通知，避免重复推送 ──
+  ── 旧的「签到巡检」check 已删除，巡检不再上报任何心跳 ──
 
 【项目直报（当前主链路，2026-11-10 上线）】
   五个项目各有一个专属 Healthchecks check，签到主 job 全部 success 后，
@@ -57,13 +57,13 @@
   一键重建脚本：本仓库 provision_heartbeats.py
     用法：HC_API_KEY=<Healthchecks 项目级读写 API Key> python provision_heartbeats.py
     建 5 个 check（unique=["name"]，重复执行不产生重复项）、写 5 个仓库
-    变量、首次 ping 激活、停用旧「签到巡检」check 的通知。脚本不含明文凭据。
+    变量、首次 ping 激活、删除废弃的旧「签到巡检」check。脚本不含明文凭据。
     已完成并验证：5 个 check 全 Up、5 个变量全存在；小浣熊真实 run
     42785231860 的 heartbeat job 输出「[心跳] 已上报成功」；模拟 Down 的
     run 42785450706 推送 errcode=0 且正确点名到 Cloud189Checkin。
 
-  旧的「签到巡检」check 保留但不挂任何通知（巡检仍会 ping 留痕），
-  这样 15:07 不会再推一条与项目直报重复的告警。
+  旧的「签到巡检」check 已于 2026-11-10 删除，巡检也不再 ping 任何心跳；
+  现在 Healthchecks 里只有上面 5 个 check，不会重复推送。
 
 【判定口径】只查有没有运行，不查业务是否签到成功
   · 今天有成功完成的运行           → 正常，静默
@@ -78,19 +78,18 @@
   GitHub 还会另发一封失败邮件，等于双通道。
   想手动验证推送通道：Actions 页面运行本 workflow，勾选「发一条测试告警」。
 
-【配置】仓库 Secrets
+【配置】仓库 Secrets（只有两个）
   WATCH_PAT      能读取五个私有仓库 Actions 运行记录的令牌（已配好）
   WECOM_APP      corpid,corpsecret,touser,agentid（已配好）
-  HEARTBEAT_URL  旧巡检心跳（通知已停用，仅留记录），不用管
+  旧 Secret HEARTBEAT_URL 已删除，代码里也不再读取。
 
-【外部心跳（已升级为项目直报）】
+【历史架构：巡检级心跳（已彻底移除）】
   旧方案：巡检跑完 ping 一个「签到巡检」check，15:07 没 ping 就告警。
   问题：监控对象是「巡检有没有跑」，而巡检自己常被 GitHub 调度跳过，
-        结果容易误报；且五个项目各自状态也体现不出来。
-  现已改为上面的【项目直报】：五个项目各自上报，缺谁点名谁。
-  HEARTBEAT_URL 仍在（巡检每次跑完会 ping 旧 check 留痕），但那个 check
-  的通知集成已清空，不会再推消息。若想恢复旧的巡检级告警，在
-  Healthchecks 给「签到巡检」重新挂上邮箱 + Webhook 集成即可。
+        容易误报；五个项目各自状态也体现不出来。
+  2026-11-10 已改为【项目直报】：五个项目各自上报，缺谁点名谁。
+  同日删除旧 check、HEARTBEAT_URL Secret 和 watchdog.py 的 ping 调用，
+  现在巡检不再上报任何心跳，Healthchecks 里只剩 5 个项目 check。
 
 【为什么会自动停：三种「停」不是一回事】
   1) 风控挂起（GitHub 2026-07-28 新规）
@@ -154,26 +153,14 @@
   巡检仓库自身至今只有手动运行记录，定时是否准时仍待观察；但它已不在
   主告警链路上，迟到或没跑都不会再导致漏报或误报。
 
-【历史配置记录：路线 ① 外部心跳（已被项目直报取代，仅供排错）】
-  ⚠️ 本节是 2026-11-09 的旧配置，现已被【项目直报】取代；但 Webhook
-     表单的填法、两个坑（Method 必须 POST、示例 Headers 必须删）仍有效，
-     因为五个新 check 用的是同一个集成，排错时可对照。
-  目标：让第三方服务在「巡检自己没运行」时主动推企微，闭掉最后一个死结。
-  代码已就绪：watchdog.py 的 ping_heartbeat() 只要检测到 HEARTBEAT_URL，
-  巡检每次真正跑完就 GET 一次；没跑就不 ping，服务到点自己告警。
+【Healthchecks Webhook 集成：表单填法（排错用）】
+  五个项目专属 check 共用同一个 Webhook 集成「签到巡检-微信告警」
+  —— 名字是历史遗留，五个 check 全靠它推微信，千万别删。
+  下面记录表单的两个坑和完整字段，微信收不到告警时对照检查。
+  旧的巡检级 check / HEARTBEAT_URL / ping_heartbeat() 已于 2026-11-10
+  全部删除；本节不再包含新建 check 的步骤，重建请用 provision_heartbeats.py。
 
-  1) 注册 healthchecks.io（邮箱魔法链接登录，无密码、无需信用卡）
-     免费 Hobbyist 给 20 个 check，本方案只用 1 个。
-  2) 新建 1 个 check（已建过的直接编辑，改下面两个值即可）
-     Name:     签到巡检
-     Schedule: Cron，表达式 7 6 * * *  （UTC 06:07 = 北京 14:07）
-     Grace:    1 小时                  （北京 15:07 没 ping 才告警）
-     Timezone: 保持 UTC，别再手动换算，否则会差 8 小时
-     ⚠️ 必须和 watch.yml 里的 cron 完全一致，两边不一致会天天误报。
-  3) 复制该 check 的 Ping URL（形如 https://hc-ping.com/xxxxxxxx）
-     本仓库 Settings > Secrets and variables > Actions > New repository secret
-     名称 HEARTBEAT_URL，值填 Ping URL。不要提交进代码、不要贴聊天。
-  4) 加告警通道（建议两个都开，互为冗余）
+  【告警通道】（两个都开，互为冗余）
      a. Email：填常用邮箱，免费、不受境外访问影响。
      b. Webhook -> 本仓库的 repository_dispatch（推荐，不用装企业微信 APP）
         让 Healthchecks 用一次 POST 触发本仓库的 heartbeat_alert job，由它
@@ -228,22 +215,18 @@
           · Test 把 $NAME 替换成 TEST、$STATUS 替换成 down，消息里会显示
             「第三方心跳没收到今天的报平安：TEST（状态 down）」。
             文案看着像真故障，其实只是测试，忽略即可；真实 Down 时
-            $NAME 才是「签到-天翼云盘」等项目名（或旧的「签到巡检」）。
+            $NAME 才是「签到-天翼云盘」等五个项目名。
           · Test 只发通知，不改变 check 状态（仍是 Up），也不用事后补
             ping 恢复。此轮 heartbeat_alert job 跑、watch job 自动
             skipped，且全程不发报平安 ping，不会把故障误记成正常。
-  5) 验证闭环
-     · 首次激活（最容易漏）：官方把「从未收到 ping」的 check 标为 New 状态，
-       告警只在 check 进入 Down 时发出。所以配好 HEARTBEAT_URL 后，
-       务必先手动 Run workflow 一次，让 Last Ping 从 Never 变成当前时间、
-       状态变成 Up，这条链路才算真正通电并有基线；在此之前不要指望它兜底。
-       检查列表里若一直显示 Last Ping: Never，说明 GitHub Secret 没配、
-       或巡检根本没跑到发 ping 那一步，先排查这两处。
-     · 正常：北京 14:07 巡检跑完 -> Healthchecks 显示 Up -> 手机不打扰。
-     · 模拟故障：临时把 HEARTBEAT_URL 改成错误地址，等 15:07 后看 Email /
-       企微有没有告警；验证完改回来。
-     · 或在本仓库 Actions 手动 Run workflow 一次，Healthchecks 的 Last Ping
-       应立即刷新成当前时间。
+  【首次激活（重建 check 时最容易漏）】
+     Healthchecks 把「从未收到 ping」的 check 标为 New，告警只在进入 Down
+     时发出。provision_heartbeats.py 已自动为每个 check 发首次 ping；
+     以后若手工重建 check，务必先 ping 一次，让 Last Ping 从 Never 变成
+     当前时间、状态变成 Up，否则不会兜底。
+     · 正常：五个项目签到成功 -> 各自 ping -> 显示 Up -> 手机不打扰。
+     · 模拟故障：对某个 ping URL 发一次 /fail，微信应收到点名告警，
+       再正常 ping 恢复 Up（不会改变签到任务本身）。
 
   【为什么不用短信】Healthchecks 官方免费版不含 SMS / 电话（要 $20/月
   Business 才给 50 条短信额度）；国内短信本身也有通道费。企业微信自建应用
@@ -276,7 +259,7 @@
   Healthchecks 一次请求做不到。解法是让 Healthchecks 把「一次 POST」
   打到 GitHub 的 repository_dispatch，由本仓库的 heartbeat_alert job
   完成剩下的两步。job 与 14:07 巡检共用 WECOM_APP，推到同一个微信会话。
-  该 job 不跑巡检、也不发报平安 ping，避免把故障告警误当作巡检正常。
+  该 job 只负责发消息，不跑巡检，避免把故障告警误当作巡检正常。
 
   【完整链路（项目直报）】
   平时：五个项目签到全部成功 -> 各自 ping 专属 check -> 记 Up -> 静默。
@@ -290,13 +273,14 @@
   故障到连 Actions 都起不来，这条告警也会一起失效 —— 此时只有 Email 能到你。
   想彻底不依赖 GitHub，就换成 PushPlus / Server酱 这类一步到微信的通道：
   微信扫码拿 token，Webhook 的 URL 填 https://www.pushplus.plus/send ，
-  Down 请求体 {"token":"<你的token>","title":"⚠️ 签到巡检心跳超时",
-  "content":"巡检今天没报平安，打开 github.com/caiping527/checkin-watchdog/actions 点 Run workflow",
+  Down 请求体 {"token":"<你的token>","title":"⚠️ 签到未上报",
+  "content":"有项目今天没上报，打开对应仓库的 actions 点 Run workflow",
   "template":"txt","channel":"wechat"}；代价是多注册一个服务。
 
 【调整】
-  改检查时间：.github/workflows/watch.yml 里的 cron（UTC，减 8 小时换算北京）
-    必须同时把 Healthchecks check 的 Cron 表达式改成同一个值，两边不一致会天天误报。
+  改检查时间：.github/workflows/watch.yml 里的 cron（UTC，减 8 小时换算北京）。
+    五个专属 check 的 Cron 由 provision_heartbeats.py 独立管理，不用跟着改；
+    本巡检只是辅助，改它不会影响 14:00 的项目直报告警。
   改项目签到时间：各仓库 .github/workflows/ 下的 cron，注意五个项目保持错峰、
     避开整点，并给巡检留出足够余量。
   增删项目：watchdog.py 顶部的 TARGETS 列表；同时更新 provision_heartbeats.py

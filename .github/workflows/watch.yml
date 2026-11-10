@@ -6,8 +6,8 @@ on:
     # 五个项目已错峰挪到北京 00:47~01:33，原先挤在 UTC 00~02 高峰导致
     # 延迟 5~8 小时；即使仍延迟 7 小时也会在上午 8 点左右跑完，
     # 所以 14:07 检查留足余量，项目级告警当时就发。
-    # Healthchecks 的 check 必须用同一个 cron（Grace 1 小时 → 15:07 兜底告警），
-    # 两边不一致会天天误报。
+    # 主告警由五个项目各自的 Healthchecks check 在北京 14:00 判定，
+    # 与本巡检的 cron 无关；本工作流只是辅助点名 + 自动重开 workflow。
     - cron: '7 6 * * *'
   workflow_dispatch:
     inputs:
@@ -36,7 +36,6 @@ jobs:
         env:
           WATCH_PAT: ${{ secrets.WATCH_PAT }}
           WECOM_APP: ${{ secrets.WECOM_APP }}
-          HEARTBEAT_URL: ${{ secrets.HEARTBEAT_URL }}
           WATCH_FORCE_ALERT: ${{ inputs.force_alert }}
           WATCH_STALE_QUEUED_MIN: '90'
         run: python3 watchdog.py

@@ -14,8 +14,8 @@
   2. 把每个 Ping URL 写入对应仓库的 Actions Variable ``HC_PING_URL``
      （各工作流的 heartbeat job 已在签到全部成功后读取它）。
   3. 各 ping 一次完成首次激活，避免 check 停留在 New 状态不触发告警。
-  4. 停用旧「签到巡检」check 的通知（保留 check 和巡检 ping 记录，
-     但不再在 15:07 推重复的巡检告警），并删掉注册时的空 check。
+  4. 删除已废弃的旧「签到巡检」check（巡检不再上报心跳），
+     并删掉注册时的空 check。
 
 脚本不含任何明文凭据；API Key 只从环境变量 HC_API_KEY 读取。
 unique=["name"] 保证重复执行不会建出重复 check。
@@ -32,7 +32,7 @@ API_ROOT = "https://healthchecks.io/api/v3/checks/"
 CHANNELS_API = "https://healthchecks.io/api/v3/channels/"
 SCHEDULE = "0 16 * * *"      # UTC 16:00 = 北京次日 00:00
 GRACE = 14 * 3600            # 14 小时 -> 北京 14:00 告警
-OLD_CHECK = "签到巡检"        # 旧的巡检级 check，取消通知但保留
+OLD_CHECK = "签到巡检"        # 已废弃的巡检级 check，重建时若存在则删除
 JUNK_CHECK = "My First Check"
 CHECKS = [
     ("签到-天翼云盘", "Cloud189Checkin"),
@@ -134,11 +134,11 @@ def main():
               % (action, name, repo, var_state, activated,
                  fresh.get("status"), fresh.get("next_ping")))
 
-    # 旧巡检 check：取消通知，避免 15:07 再推一条重复的巡检告警
+    # 旧巡检级 check 已废弃：2026-11-10 起巡检不再 ping，重建时直接删除
     old = by_name.get(OLD_CHECK)
     if old:
-        hc("POST", API_ROOT + old["uuid"], key, {"channels": ""})
-        print("[清理] 旧 check「%s」已取消通知（保留 check 与 ping 记录）" % OLD_CHECK)
+        hc("DELETE", API_ROOT + old["uuid"], key)
+        print("[清理] 已删除废弃 check「%s」" % OLD_CHECK)
     junk = by_name.get(JUNK_CHECK)
     if junk:
         hc("DELETE", API_ROOT + junk["uuid"], key)
