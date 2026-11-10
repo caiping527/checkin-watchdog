@@ -264,13 +264,45 @@ FIX_GUIDE = [
 ]
 
 
+# 项目直报：每个签到项目有专属 Healthchecks check，Down 时按名字点名到仓库
+CHECK_REPOS = {
+    "签到-天翼云盘": "Cloud189Checkin",
+    "签到-小浣熊": "raccoon-checkin",
+    "签到-WorkBuddy": "workbuddy-checkin-public",
+    "签到-Hyperdown": "hyperdown-checkin",
+    "签到-迅维网": "chinafix-sign",
+}
+
+
 def build_heartbeat_alert(name, status, now):
     """第三方心跳判超时后的告警。这条消息由 Healthchecks 经 GitHub 触发，
-    不经过本巡检程序，所以能兜住「巡检自己完全没跑」。"""
-    lines = [
-        "⚠️ 签到巡检心跳超时（%s 北京时间）" % now.astimezone(BEIJING).strftime("%m-%d %H:%M"),
+    不经过本巡检程序，所以能兜住「巡检自己完全没跑」。
+
+    name 是 Healthchecks 的 check 名：项目级 check 点名到具体仓库，
+    原有的「签到巡检」check 保留兼容巡检自身超时的文案。
+    """
+    stamp = now.astimezone(BEIJING).strftime("%m-%d %H:%M")
+    label = name or "签到巡检"
+    state = status or "Down"
+    repo = CHECK_REPOS.get(label)
+    if repo:
+        return "\n".join([
+            "⚠️ 项目签到未上报（%s 北京时间）" % stamp,
+            "",
+            "第三方心跳没收到今天的成功上报：%s（状态 %s）" % (label, state),
+            "说明：该项目今天没跑完签到，或跑完但失败。五个项目各自独立监控，缺谁报谁。",
+            "",
+            "【怎么处理】",
+            "1 打开 github.com/caiping527/%s/actions" % repo,
+            "2 看今天有没有红色 run，点进去看日志",
+            "3 有黄色横幅就点 Enable workflow",
+            "4 点 Run workflow 手动补签",
+            "常见原因：GitHub 定时调度积压、登录态/密码过期、Secret 失效。",
+        ])
+    return "\n".join([
+        "⚠️ 签到巡检心跳超时（%s 北京时间）" % stamp,
         "",
-        "第三方心跳没收到今天的报平安：%s（状态 %s）" % (name or "签到巡检", status or "Down"),
+        "第三方心跳没收到今天的报平安：%s（状态 %s）" % (label, state),
         "说明：checkin-watchdog 巡检仓库今天没跑起来，五个签到项目今天没人检查。",
         "这条告警由心跳服务触发，不经过 GitHub 巡检程序。",
         "",
@@ -280,8 +312,7 @@ def build_heartbeat_alert(name, status, now):
         "3 点 Run workflow 手动跑一次巡检",
         "4 再看五个项目当天有没有签到，缺的点 Run workflow 补签",
         "常见原因：巡检工作流被停用、WATCH_PAT 过期、GitHub 调度故障。",
-    ]
-    return "\n".join(lines)
+    ])
 
 
 def send_heartbeat_event():
@@ -291,8 +322,9 @@ def send_heartbeat_event():
     """
     event = (os.environ.get("HC_EVENT") or "heartbeat_down").strip()
     if event == "heartbeat_up":
-        text = "✅ 签到巡检已恢复报平安（%s 北京时间），忽略即可" % (
-            utcnow().astimezone(BEIJING).strftime("%m-%d %H:%M"))
+        label = os.environ.get("HC_NAME") or "签到巡检"
+        text = "✅ %s 已恢复上报（%s 北京时间），忽略即可" % (
+            label, utcnow().astimezone(BEIJING).strftime("%m-%d %H:%M"))
     else:
         text = build_heartbeat_alert(
             os.environ.get("HC_NAME"), os.environ.get("HC_STATUS"), utcnow())
