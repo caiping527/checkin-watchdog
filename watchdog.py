@@ -140,7 +140,7 @@ def ensure_enabled(repo, token):
     return notes
 
 
-def check_one(repo, label, token, since):
+def check_one(repo, label, token, since, day_word="今天"):
     base = {"repo": repo, "label": label, "ok": False, "reason": ""}
     try:
         data = api_get(
@@ -158,7 +158,7 @@ def check_one(repo, label, token, since):
     newest = runs[0]
     newest_at = bj_text(parse_time(newest["created_at"]))
     if not today:
-        base["reason"] = "今天没有运行（最近一次 %s）" % newest_at
+        base["reason"] = "%s没有运行（最近一次 %s）" % (day_word, newest_at)
         return base
 
     good = [r for r in today if r.get("conclusion") == "success"]
@@ -365,11 +365,21 @@ def main():
         return 2
 
     now = utcnow()
-    bj_day = now.astimezone(BEIJING).replace(hour=0, minute=0, second=0, microsecond=0)
+    bj_now = now.astimezone(BEIJING)
+    # 这班自己被 GitHub 拖到凌晨（00:00~08:59）时，判定窗口退回"昨天"：
+    # 那时"今天"才刚开始，各项目根本还没到点，按今天判只会全员误报
+    # （2026-11-24 01:57 那条五种项目全"没运行"的假告警就是这么来的）。
+    if bj_now.hour < 9:
+        bj_day = (bj_now - datetime.timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0)
+        day_word = "昨天"
+    else:
+        bj_day = bj_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_word = "今天"
     since = bj_day.astimezone(datetime.timezone.utc)
 
-    print("=== 签到巡检 %s（北京时间，判定起点 %s）===" % (
-        now.astimezone(BEIJING).strftime("%Y-%m-%d %H:%M"), bj_day.strftime("%m-%d 00:00")))
+    print("=== 签到巡检 %s（北京时间，判定%s起点 %s）===" % (
+        bj_now.strftime("%Y-%m-%d %H:%M"), day_word, bj_day.strftime("%m-%d 00:00")))
 
     print("--- 工作流状态自愈 ---")
     state_notes = {}
@@ -378,7 +388,16 @@ def main():
     if not any(state_notes.values()):
         print("  五个项目的 workflow 均为 active，无需处理")
 
-    results = [check_one(repo, label, token, since) for repo, label in TARGETS]
+    results = [check_one(repo, label, token, since, day_word) for repo, label in TARGETS]
+
+    # 13:00 前不判"今天没跑"：这个点之前各项目还在 GitHub 的调度延迟里，
+    # 判了只会误报；有运行但失败 / 卡住不动的照常报。14:00 的补跑班会接手。
+    if day_word == "今天" and bj_now.hour < 13:
+        for item in results:
+            if not item["ok"] and "没有运行" in item["reason"]:
+                item["ok"] = True
+                item["reason"] += "（13:00 前不判定，继续等调度）"
+
     for item in results:
         item["notes"] = state_notes.get(item["repo"]) or []
         print("  [%s] %-11s %-24s %s" % (
