@@ -1,0 +1,48 @@
+name: 签到补跑检查（14:00）
+
+# ─────────────────────────────────────────────────────────────
+#  为什么要有这个 workflow
+#  GitHub 的定时（schedule）只是 best-effort：会延迟 4~9 小时，
+#  负载高时整班会被丢掉且不补跑。三个签到主 workflow 一天只有一班，
+#  一旦丢班当天就没有签到（2026-11-24 Qoder 就是这么漏的）。
+#
+#  这里在每天北京时间 14:00 再查一次：
+#    · 今天已经成功跑过        → 什么都不做
+#    · 正在跑 / 排队           → 什么都不做
+#    · 今天已经补过一次        → 什么都不做
+#    · 以上都不是（真丢班了）  → 补触发一次原来的主 workflow
+#
+#  不会重复签到：补的是原 workflow，脚本自己幂等（Qoder 已领会直接返回、
+#  WorkBuddy 返回「今日已签到」、小浣熊返回「已到账」），
+#  而且 09:00~23:00 之外一律不补，避免这班被拖到凌晨时半夜签到。
+# ─────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    # UTC 06:00 = 北京时间 14:00
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: checkin-catchup
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  catch_up:
+    name: 检查并按需补跑
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 检查今天有没有成功，缺了就补一次
+        env:
+          WATCH_PAT: ${{ secrets.WATCH_PAT }}
+        run: python3 catch_up.py
